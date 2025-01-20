@@ -5,7 +5,6 @@ const cors = require('cors');
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const bcrypt = require('bcrypt');
-const { google } = require('googleapis');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -290,12 +289,12 @@ async function appendToGoogleSheet(data) {
         });
 
         // Send data to Google Apps Script
-        await axios.post(process.env.GOOGLE_SHEET_URL, payload, {
+        const response = await axios.post(process.env.GOOGLE_SHEET_URL, payload, {
             headers: { 'Content-Type': 'application/json' },
             timeout: 5000
         });
 
-        console.log('Successfully logged to Google Sheet');
+        console.log('Successfully logged to Google Sheet:', response.data);
         return true;
     } catch (error) {
         console.error('Google Sheets logging error:', error.message);
